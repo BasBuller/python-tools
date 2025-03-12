@@ -15,12 +15,25 @@ import llm
 import html2text
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+import re
 
-def download_files(url, download_folder, file_types):
-    os.makedirs(download_folder, exist_ok=True)
+def download_files(url, base_download_folder, file_types):
+    # Fetch webpage content
     response = requests.get(url)
     response.raise_for_status()
+    
+    # Parse HTML with BeautifulSoup
     soup = BeautifulSoup(response.text, 'html.parser')
+    
+    # Extract page title and sanitize it for folder name
+    page_title = soup.title.string if soup.title else "untitled"  # Fallback to "untitled" if no title
+    page_title = re.sub(r'[<>:"/\\|?*]', '', page_title).strip()
+    if not page_title:  # Ensure non-empty folder name
+        page_title = "untitled"
+    
+    # Create subfolder with page title inside base_download_folder
+    download_folder = os.path.join(base_download_folder, page_title)
+    os.makedirs(download_folder, exist_ok=True)
     
     # Download linked files of specified types
     downloaded_files = []
@@ -42,30 +55,31 @@ def download_files(url, download_folder, file_types):
     h.ignore_images = True  # Skip images for cleaner output
     page_text = h.handle(str(soup))
     
-    return downloaded_files, page_text
+    return downloaded_files, page_text, download_folder
 
 def generate_summary(page_text, download_folder):
-    """Generate a summary of the webpage using an LLM and save it."""
-    prompt = f"Briefly summarize the following webpage content (in Markdown), don't write tables and such, just a few sentences summary that's easy to read:\n\n{page_text[:5000]}"
+    """Generate a summary of the webpage using an LLM and save it in the subfolder."""
+    prompt = f"Briefly summarize the following webpage content (in Markdown), keep it to a couple of sentence that is easy to read, no tables etc:\n\n{page_text[:5000]}"
     summary = llm.get_model("gpt-4o-mini").prompt(prompt)
-    
     summary_path = os.path.join(download_folder, "summary.txt")
     with open(summary_path, "w") as summary_file:
         summary_file.write(summary.text())
-    
     print("\nSummary saved to:", summary_path)
 
 @click.command()
 @click.argument("url")
-@click.option("--download-folder", default="downloads", help="Folder to save files")
+@click.option("--download-folder", default="downloads", help="Base folder to save subfolders")
 @click.option("--file-types", default="csv", help="Comma-separated list of file extensions (e.g., csv,png,txt)")
 @click.option("--summarize", is_flag=True, help="Generate a summary of the webpage")
 def cli(url, download_folder, file_types, summarize):
-    """Download files from a webpage and optionally summarize it."""
+    """Download files from a webpage into a subfolder named after the page title and optionally summarize it."""
     file_types = [f".{ext.strip()}" for ext in file_types.split(",")]
-    downloaded_files, page_text = download_files(url, download_folder, file_types)
+    downloaded_files, page_text, subfolder = download_files(url, download_folder, file_types)
+    with open(os.path.join(subfolder, "url.txt"), "w") as f:
+        f.write(url)
     if summarize:
-        generate_summary(page_text, download_folder)
+        generate_summary(page_text, subfolder)
 
 if __name__ == "__main__":
     cli()
+
